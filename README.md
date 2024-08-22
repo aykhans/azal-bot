@@ -5,7 +5,7 @@
 ### With Docker (Recommended)
 Pull the Docker image from Docker Hub:
 ```sh
-docker pull aykhans/dodo:latest
+docker pull aykhans/azal-bot:latest
 ```
 
 ### With Binary File
