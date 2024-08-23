@@ -88,6 +88,7 @@ func (responseTime *ResponseTime) UnmarshalJSON(b []byte) error {
 }
 
 type SuccessResponse struct {
+	Warnings []any `json:"warnings"`
 	Search struct {
 		OptionSets []struct {
 			Options []struct {
@@ -461,6 +462,10 @@ func startBot(botConfig *BotConfig, ifAvailable func(avialableFlights AvialableF
 				continue
 			}
 
+			if len(data.Warnings) > 0 {
+				log.Println(Colored(Colors.Yellow, "No flights available for ", day))
+				continue
+			}
 			for _, option := range data.Search.OptionSets[0].Options {
 				departureDate := option.Route.DepartureDate
 				if (departureDate.After(botConfig.FirstDate) || departureDate.Equal(botConfig.FirstDate)) &&
