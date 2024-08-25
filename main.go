@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	RequestURL = "https://azal.az/book/api/flights/search/by-deeplink"
-	Version    = "0.1.0"
+	RequestURL     = "https://azal.az/book/api/flights/search/by-deeplink"
+	TelegramAPIURL = "https://api.telegram.org/bot%s/sendMessage"
+	Version        = "0.1.0"
 )
 
 var (
@@ -51,6 +52,63 @@ func Colored(color string, a ...any) string {
 }
 
 type AvialableFlights map[string][]time.Time
+
+type TelegramRequest struct {
+	Client *http.Client
+	BotKey string
+	ChatID string
+}
+
+func (telegramRequest *TelegramRequest) sendTelegramMessage(message string) error {
+	url := fmt.Sprintf(TelegramAPIURL, telegramRequest.BotKey)
+
+	req, err := http.NewRequest("POST", url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	q := req.URL.Query()
+	q.Add("chat_id", telegramRequest.ChatID)
+	q.Add("text", message)
+	q.Add("parse_mode", "HTML")
+	req.URL.RawQuery = q.Encode()
+
+	resp, err := telegramRequest.Client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("error: telegram send message status code: %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func (telegramRequest *TelegramRequest) sendTelegramFlightNotification(avialableFlights AvialableFlights) error {
+	message := "Azal Bot\n\n"
+	for day, flights := range avialableFlights {
+		message += fmt.Sprintf("%s\n-----------\n", day)
+		for _, flight := range flights {
+			message += fmt.Sprintf("%s\n", flight.Format("15:04:05"))
+		}
+		message += "\n"
+	}
+	message = message[:len(message)-1]
+	return telegramRequest.sendTelegramMessage(message)
+}
+
+func (telegramRequest *TelegramRequest) sendTelegramStartNotification(botConfig *BotConfig) error {
+	return telegramRequest.sendTelegramMessage(
+		fmt.Sprintf(
+			"Azal Bot started\n\nFrom: %s\nTo: %s\nFirst Date: %s\nLast Date: %s\nRepetition Interval: %s",
+			botConfig.From,
+			botConfig.To,
+			botConfig.FirstDate.Format("2006-01-02T15:04:05"),
+			botConfig.LastDate.Format("2006-01-02T15:04:05"),
+			botConfig.RepetInterval.String(),
+		),
+	)
+}
 
 type UserInput struct {
 	FirstDate      time.Time
@@ -89,7 +147,7 @@ func (responseTime *ResponseTime) UnmarshalJSON(b []byte) error {
 
 type SuccessResponse struct {
 	Warnings []any `json:"warnings"`
-	Search struct {
+	Search   struct {
 		OptionSets []struct {
 			Options []struct {
 				ID        string `json:"id"`
@@ -403,42 +461,6 @@ func getUserInput() *UserInput {
 	return userInput
 }
 
-func sendTelegramMessage(avialableFlights AvialableFlights, botKey string, chatID string) error {
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", botKey)
-
-	req, err := http.NewRequest("POST", url, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	message := "Azal Bot\n\n"
-	for day, flights := range avialableFlights {
-		message += fmt.Sprintf("%s\n-----------\n", day)
-		for _, flight := range flights {
-			message += fmt.Sprintf("%s\n", flight.Format("15:04:05"))
-		}
-		message += "\n"
-	}
-	message = message[:len(message)-1]
-	q := req.URL.Query()
-	q.Add("chat_id", chatID)
-	q.Add("text", message)
-	q.Add("parse_mode", "HTML")
-	req.URL.RawQuery = q.Encode()
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return fmt.Errorf("telegram send message status code: %d", resp.StatusCode)
-	}
-	return nil
-}
-
 func startBot(botConfig *BotConfig, ifAvailable func(avialableFlights AvialableFlights) error) {
 	queryConf := QueryConfig{
 		From: botConfig.From,
@@ -500,13 +522,17 @@ func main() {
 
 	ifAvailableFunc := func(avialableFlights AvialableFlights) error { return nil }
 	if userInput.TelegramBotKey != "" {
+		telegramRequest := &TelegramRequest{
+			Client: &http.Client{},
+			BotKey: userInput.TelegramBotKey,
+			ChatID: userInput.TelegramChatID,
+		}
+		if err := telegramRequest.sendTelegramStartNotification(botConfig); err != nil {
+			log.Println(Colored(Colors.Red, err.Error()))
+		}
 		ifAvailableFunc = func(avialableFlights AvialableFlights) error {
 			if len(avialableFlights) > 0 {
-				return sendTelegramMessage(
-					avialableFlights,
-					userInput.TelegramBotKey,
-					userInput.TelegramChatID,
-				)
+				return telegramRequest.sendTelegramFlightNotification(avialableFlights)
 			}
 			return nil
 		}
