@@ -21,6 +21,7 @@ const (
 
 var (
 	ErrorNoFlightsAvailable = fmt.Errorf("no flights available")
+	ErrorFlowInterrupted    = fmt.Errorf("flow interrupted")
 )
 
 var Colors = struct {
@@ -85,7 +86,7 @@ func (telegramRequest *TelegramRequest) sendTelegramMessage(message string) erro
 }
 
 func (telegramRequest *TelegramRequest) sendTelegramFlightNotification(avialableFlights AvialableFlights) error {
-	message := "Azal Bot\n\n"
+	message := "Azal Bot Flights\n\n"
 	for day, flights := range avialableFlights {
 		message += fmt.Sprintf("%s\n-----------\n", day)
 		for _, flight := range flights {
@@ -108,6 +109,10 @@ func (telegramRequest *TelegramRequest) sendTelegramStartNotification(botConfig 
 			botConfig.RepetInterval.String(),
 		),
 	)
+}
+
+func (telegramRequest *TelegramRequest) sendTelegramErrorNotification(err error) error {
+	return telegramRequest.sendTelegramMessage(fmt.Sprintf("Azal Bot Error: %s", err.Error()))
 }
 
 type UserInput struct {
@@ -303,12 +308,14 @@ func handleErrorResponse(errorResponse *ErrorResponse) error {
 	switch errorResponse.Error.Code {
 	case "no.flights.available":
 		return ErrorNoFlightsAvailable
+	case "flow.interrupted.error":
+		return ErrorFlowInterrupted
 	default:
 		return fmt.Errorf("unknown error: %s", errorResponse.Error.Code)
 	}
 }
 
-func sendRequest(queryConf *QueryConfig, headerConf *HeaderConfig) (*SuccessResponse, error) {
+func sendRequest(client *http.Client, queryConf *QueryConfig, headerConf *HeaderConfig) (*SuccessResponse, error) {
 	req, err := http.NewRequest("GET", RequestURL, nil)
 	if err != nil {
 		return nil, err
@@ -317,7 +324,6 @@ func sendRequest(queryConf *QueryConfig, headerConf *HeaderConfig) (*SuccessResp
 	headerConf.setToRequest(req)
 	queryConf.setToRequest(req)
 
-	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -461,7 +467,7 @@ func getUserInput() *UserInput {
 	return userInput
 }
 
-func startBot(botConfig *BotConfig, ifAvailable func(avialableFlights AvialableFlights) error) {
+func startBot(botConfig *BotConfig, ifAvailable func(avialableFlights AvialableFlights) error, ifError func(err error) error) {
 	queryConf := QueryConfig{
 		From: botConfig.From,
 		To:   botConfig.To,
@@ -470,17 +476,24 @@ func startBot(botConfig *BotConfig, ifAvailable func(avialableFlights AvialableF
 	headerConf := HeaderConfig{}
 	headerConf.setDefaults()
 
+	sendRequestClient := &http.Client{}
 	for {
 		avialableFlights := make(AvialableFlights)
 		for _, day := range botConfig.days {
 			queryConf.DepartureDate = day
-			data, err := sendRequest(&queryConf, &headerConf)
+			data, err := sendRequest(sendRequestClient, &queryConf, &headerConf)
 			if err != nil {
-				if err == ErrorNoFlightsAvailable {
+				switch err {
+				case ErrorNoFlightsAvailable:
 					log.Println(Colored(Colors.Yellow, "No flights available for ", day))
-					continue
+				case ErrorFlowInterrupted:
+					log.Println(Colored(Colors.Red, "The date entered has passed: ", day))
+					if err := ifError(fmt.Errorf("the date entered has passed: %s", day)); err != nil {
+						log.Println(Colored(Colors.Red, err.Error()))
+					}
+				default:
+					log.Println(Colored(Colors.Red, err.Error()))
 				}
-				log.Println(Colored(Colors.Red, err.Error()))
 				continue
 			}
 
@@ -521,6 +534,7 @@ func main() {
 	}
 
 	ifAvailableFunc := func(avialableFlights AvialableFlights) error { return nil }
+	ifErrorFunc := func(err error) error { return nil }
 	if userInput.TelegramBotKey != "" {
 		telegramRequest := &TelegramRequest{
 			Client: &http.Client{},
@@ -536,10 +550,17 @@ func main() {
 			}
 			return nil
 		}
+		ifErrorFunc = func(err error) error {
+			if err != nil {
+				return telegramRequest.sendTelegramErrorNotification(err)
+			}
+			return nil
+		}
 	}
 
 	startBot(
 		botConfig,
 		ifAvailableFunc,
+		ifErrorFunc,
 	)
 }
