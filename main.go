@@ -16,7 +16,7 @@ import (
 const (
 	RequestURL     = "https://azal.az/book/api/flights/search/by-deeplink"
 	TelegramAPIURL = "https://api.telegram.org/bot%s/sendMessage"
-	Version        = "0.1.0"
+	Version        = "0.2.0"
 )
 
 var (
