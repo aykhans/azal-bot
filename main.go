@@ -16,7 +16,7 @@ import (
 const (
 	RequestURL     = "https://azal.az/book/api/flights/search/by-deeplink"
 	TelegramAPIURL = "https://api.telegram.org/bot%s/sendMessage"
-	Version        = "0.2.0"
+	Version        = "0.2.1"
 )
 
 var (
@@ -52,7 +52,13 @@ func Colored(color string, a ...any) string {
 	return color + fmt.Sprint(a...) + Colors.reset
 }
 
-type AvialableFlights map[string][]time.Time
+type AvialableFlight struct {
+	Economy       bool
+	Business      bool
+	DepartureDate time.Time
+}
+
+type AvialableFlights map[string][]AvialableFlight
 
 type TelegramRequest struct {
 	Client *http.Client
@@ -90,7 +96,17 @@ func (telegramRequest *TelegramRequest) sendTelegramFlightNotification(avialable
 	for day, flights := range avialableFlights {
 		message += fmt.Sprintf("%s\n-----------\n", day)
 		for _, flight := range flights {
-			message += fmt.Sprintf("%s\n", flight.Format("15:04:05"))
+			classes := ""
+			if flight.Economy {
+				classes += "Economy"
+			}
+			if flight.Business {
+				if classes != "" {
+					classes += ", "
+				}
+				classes += "Business"
+			}
+			message += fmt.Sprintf("%s (%s)\n", flight.DepartureDate.Format("15:04:05"), classes)
 		}
 		message += "\n"
 	}
@@ -155,9 +171,11 @@ type SuccessResponse struct {
 	Search   struct {
 		OptionSets []struct {
 			Options []struct {
-				ID        string `json:"id"`
-				Available bool   `json:"available"`
-				Route     struct {
+				ID                         string `json:"id"`
+				Available                  bool   `json:"available"`
+				CheapestEconomySolutionId  string `json:"cheapestEconomySolutionId"`
+				CheapestBusinessSolutionId string `json:"cheapestBusinessSolutionId"`
+				Route                      struct {
 					ID            string       `json:"id"`
 					DepartureDate ResponseTime `json:"departureDate"`
 				} `json:"route"`
@@ -506,8 +524,25 @@ func startBot(botConfig *BotConfig, ifAvailable func(avialableFlights AvialableF
 				if (departureDate.After(botConfig.FirstDate) || departureDate.Equal(botConfig.FirstDate)) &&
 					(departureDate.Before(botConfig.LastDate) || departureDate.Equal(botConfig.LastDate)) {
 
-					avialableFlights[day] = append(avialableFlights[day], departureDate.Time)
-					log.Println(Colored(Colors.Green, "Flight available for ", departureDate))
+					avialableFlights[day] = append(
+						avialableFlights[day],
+						AvialableFlight{
+							Economy:       option.CheapestEconomySolutionId != "",
+							Business:      option.CheapestBusinessSolutionId != "",
+							DepartureDate: departureDate.Time,
+						},
+					)
+					classes := ""
+					if option.CheapestEconomySolutionId != "" {
+						classes += "Economy"
+					}
+					if option.CheapestBusinessSolutionId != "" {
+						if classes != "" {
+							classes += ", "
+						}
+						classes += "Business"
+					}
+					log.Println(Colored(Colors.Green, "Flight available for ", departureDate, " (" + classes + ")"))
 				} else {
 					log.Println(Colored(Colors.Yellow, "No flights available for ", departureDate))
 				}
